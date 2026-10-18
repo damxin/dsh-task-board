@@ -101,17 +101,27 @@ function ExecutionSettingsSection({ controller, task, pending, executionOptions,
 }) {
   const options = executionOptions
   const models = options.models ?? []
+  const sessions = options.sessions ?? []
   const workspaceId = task.workspaceId ?? ''
+  const sessionId = task.sessionId ?? ''
   const mode = task.mode ?? ''
   const permission = task.permission ?? ''
   const model = task.model ?? ''
   const reasoningEffort = task.reasoningEffort ?? ''
   // A pinned target may disappear from the runtime (workspace deleted,
-  // preset removed); keep it selectable as a stale row instead of silently
-  // dropping it, so the user sees exactly what the task will ask for.
+  // preset removed, session deleted); keep it selectable as a stale row instead
+  // of silently dropping it, so the user sees exactly what the task will ask
+  // for.
   const workspaceKnown = workspaceId === '' || options.workspaces.some(item => item.workspaceId === workspaceId)
+  const sessionKnown = sessionId === '' || sessions.some(item => item.sessionId === sessionId)
   const modeKnown = mode === '' || options.presets.some(item => item.id === mode)
   const modelKnown = model === '' || models.some(item => item.id === model)
+  // A pinned session decides the run's landing spot entirely: the execution
+  // continues inside that conversation, so its own workspace governs where
+  // files land. Keeping both pickers live would let one card carry two
+  // competing targets, so the workspace picker stands down while a session is
+  // pinned (the hint below says so) instead of one pin silently winning.
+  const sessionPinned = sessionId !== ''
   return (
     <section className={css.detailSection}>
       <h4>{t('detail.executionSettings')}</h4>
@@ -121,13 +131,32 @@ function ExecutionSettingsSection({ controller, task, pending, executionOptions,
         <select
           className={css.select}
           value={workspaceId}
-          disabled={pending}
+          disabled={pending || sessionPinned}
           onChange={event => { controller.updateTask(task.id, { workspaceId: event.target.value }) }}
         >
           <option value="">{t('exec.workspace.recent')}</option>
           {!workspaceKnown && <option value={workspaceId}>{workspaceId}{t('exec.mode.removed')}</option>}
           {options.workspaces.map(workspace => (
             <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.title}</option>
+          ))}
+        </select>
+      </label>
+      {sessionPinned && <p className={css.detailText}>{t('exec.session.workspaceHint')}</p>}
+      <label className={css.field}>
+        <span className={css.fieldLabel}>{t('new.session')}</span>
+        <select
+          className={css.select}
+          value={sessionId}
+          disabled={pending}
+          onChange={event => { controller.updateTask(task.id, { sessionId: event.target.value }) }}
+        >
+          <option value="">{t('exec.session.everyRun')}</option>
+          {!sessionKnown && <option value={sessionId}>{sessionId}{t('exec.session.removed')}</option>}
+          {sessions.map(session => (
+            <option key={session.sessionId} value={session.sessionId}>
+              {session.title}
+              {session.running ? t('exec.session.runningSuffix') : ''}
+            </option>
           ))}
         </select>
       </label>

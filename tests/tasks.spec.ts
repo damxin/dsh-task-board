@@ -60,6 +60,15 @@ describe('createTask', () => {
     expect(blank.model).toBeUndefined()
   })
 
+  it('carries the session pin and collapses a blank one', () => {
+    expect(createTask({ title: 'x', description: '', prompt: '', sessionId: '  session-a  ' }, NOW, 'task-5').sessionId)
+      .toBe('session-a')
+    expect(createTask({ title: 'x', description: '', prompt: '', sessionId: '   ' }, NOW, 'task-6').sessionId)
+      .toBeUndefined()
+    expect(createTask({ title: 'x', description: '', prompt: '' }, NOW, 'task-7').sessionId)
+      .toBeUndefined()
+  })
+
   it('drops unknown permission strings', () => {
     const task = createTask(
       { title: 'x', description: '', prompt: '', permission: 'root' as never },

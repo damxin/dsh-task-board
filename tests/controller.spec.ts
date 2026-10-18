@@ -78,16 +78,18 @@ function seedTask(store: InMemoryTaskStore, overrides: Partial<Parameters<typeof
 describe('BoardController execution options', () => {
   it('starts with empty picker option sets and merges partial updates', () => {
     const { controller } = makeController()
-    expect(controller.getSnapshot().executionOptions).toEqual({ workspaces: [], presets: [], models: [] })
+    expect(controller.getSnapshot().executionOptions).toEqual({ workspaces: [], presets: [], models: [], sessions: [] })
     controller.setExecutionOptions({ workspaces: [{ workspaceId: 'ws-1', title: 'One' }] })
     expect(controller.getSnapshot().executionOptions.workspaces).toEqual([{ workspaceId: 'ws-1', title: 'One' }])
     expect(controller.getSnapshot().executionOptions.presets).toEqual([])
     expect(controller.getSnapshot().executionOptions.models).toEqual([])
+    expect(controller.getSnapshot().executionOptions.sessions).toEqual([])
     controller.setExecutionOptions({ presets: [{ id: 'anchored', isDefault: true }] })
     expect(controller.getSnapshot().executionOptions).toEqual({
       workspaces: [{ workspaceId: 'ws-1', title: 'One' }],
       presets: [{ id: 'anchored', isDefault: true }],
       models: [],
+      sessions: [],
     })
     controller.setExecutionOptions({ models: [{ id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat' }] })
     expect(controller.getSnapshot().executionOptions.models).toEqual([

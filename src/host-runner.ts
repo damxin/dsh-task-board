@@ -393,20 +393,9 @@ export class HostExecutionRunner {
     catalog?: ModelCatalogView
   } = {}): Promise<string> {
     // A handover bundle overrides the legacy pin fields: the bundle is the
-    // authoritative execution triplet for a continuation card (issue #5). A
-    // card that pins nothing is resolved to the deployment's most recently used
-    // workspace instead of being left to `session.create`, whose own fallback is
-    // the Host process working directory (the desktop app's profile directory) —
-    // never the project the user was in when the card was written.
-    const workspaceId = task.handover?.workspaceId ?? task.workspaceId ?? this.recentWorkspaceId()
+    // authoritative execution triplet for a continuation card (issue #5).
     const mode = task.handover?.mode ?? task.mode
     const permission = task.handover?.permission ?? task.permission
-
-    if (workspaceId !== undefined && this.workspaceRegistry !== undefined) {
-      if (!this.workspaceRegistry.list().some(item => item.id === workspaceId)) {
-        throw new Error('workspace not found: ' + workspaceId)
-      }
-    }
     if (mode !== undefined) {
       const presets = await this.invoke('agentPresets', 'list', {}) as { presets?: readonly { id: string; broken?: string }[] }
       const preset = presets.presets?.find(item => item.id === mode)
@@ -436,6 +425,22 @@ export class HostExecutionRunner {
         throw new SessionLaunchError(reused, error)
       }
       return reused
+    }
+    // Workspace placement is a FRESH-session concern only: a run continuing in
+    // an existing session (a pinned one, or the reuse opt-in's) lives in that
+    // session's own workspace, so the card's workspace pin is neither consulted
+    // nor validated here — a stale workspace id on a session-pinned card must
+    // not fail the run, because continuing a conversation never moves it. A
+    // fresh card that pins nothing is resolved to the deployment's most
+    // recently used workspace instead of being left to `session.create`, whose
+    // own fallback is the Host process working directory (the desktop app's
+    // profile directory) — never the project the user was in when the card was
+    // written.
+    const workspaceId = task.handover?.workspaceId ?? task.workspaceId ?? this.recentWorkspaceId()
+    if (workspaceId !== undefined && this.workspaceRegistry !== undefined) {
+      if (!this.workspaceRegistry.list().some(item => item.id === workspaceId)) {
+        throw new Error('workspace not found: ' + workspaceId)
+      }
     }
     const created = await this.invoke('session', 'create', {
       ...(workspaceId === undefined ? {} : { workspaceId }),

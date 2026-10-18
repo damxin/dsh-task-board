@@ -140,11 +140,29 @@ export interface ExecutionModelOption {
   }
 }
 
+/** One session option the execution-target pickers offer. */
+export interface ExecutionSessionOption {
+  sessionId: string
+  /** Display label (session title; the wiring falls back to cwd, then the id). */
+  title: string
+  /** Whether the conversation currently has a turn running (marked in the picker). */
+  running: boolean
+  /** Last-activity instant (ms epoch), when the catalog reports one. */
+  updatedAt?: number
+}
+
 /** The execution-target option sets the UI feeds into the controller. */
 export interface ExecutionOptionsSnapshot {
   workspaces: readonly ExecutionWorkspaceOption[]
   presets: readonly ExecutionPresetOption[]
   models?: readonly ExecutionModelOption[]
+  /**
+   * Live rows of the client session catalog (optional like `models?`: feeds
+   * arrive as the runtime serves them). These are runtime facts, not ledger
+   * state — a session that has since been deleted stays selectable as the
+   * card's stale "removed" row instead of silently resetting the pin.
+   */
+  sessions?: readonly ExecutionSessionOption[]
 }
 
 /**
@@ -216,7 +234,7 @@ export class BoardController {
   private boardOpen = false
   private archiveView = false
   private selectedTaskId: string | undefined
-  private executionOptions: ExecutionOptionsSnapshot = { workspaces: [], presets: [], models: [] }
+  private executionOptions: ExecutionOptionsSnapshot = { workspaces: [], presets: [], models: [], sessions: [] }
   private workspaceCreator: WorkspaceCreator | undefined
   private listeners = new Set<() => void>()
   private disposers: Array<() => void> = []

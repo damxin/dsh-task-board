@@ -1228,3 +1228,178 @@ describe('workspace inheritance on creation', () => {
     service.dispose()
   })
 })
+
+describe('session-pinned execution target', () => {
+  const FIXED = 'session-fixed'
+
+  type RosterRow = { sessionId: string; running: boolean }
+
+  /**
+   * A gateway that serves the roster probe plus the run RPCs, recording what a
+   * launch actually did. An `unavailable` roster is modelled the way the runner
+   * sees a withdrawn `session/list` endpoint — the invocation-unavailable code
+   * that `listRunning` reports as `{ known: false }` without retrying.
+   */
+  function fixedSessionGateway(roster: readonly RosterRow[] | 'unavailable') {
+    const created: string[] = []
+    const prompts: Array<{ sessionId: string; text: string }> = []
+    const { gateway } = makeGateway(request => {
+      if (request.namespace !== 'session') throw new Error('unexpected namespace')
+      if (request.method === 'list') {
+        if (roster === 'unavailable') {
+          const error = new Error('session tree withdrew the endpoint') as Error & { code?: string }
+          error.code = 'invocation-unavailable'
+          throw error
+        }
+        return { items: roster }
+      }
+      if (request.method === 'create') {
+        created.push('session-minted-' + (created.length + 1))
+        return { sessionId: created[created.length - 1] }
+      }
+      if (request.method === 'rename') return { title: 'x', seq: 1 }
+      if (request.method === 'prompt') {
+        const args = request.args.request as { sessionId: string; content: Array<{ text: string }> }
+        prompts.push({ sessionId: args.sessionId, text: args.content[0].text })
+        return { accepted: true }
+      }
+      throw new Error('unexpected gateway call: ' + request.method)
+    })
+    return { gateway, created, prompts }
+  }
+
+  function serviceFor(ledger: HostTaskLedger, gateway: ReturnType<typeof fixedSessionGateway>['gateway']): TaskBoardHostService {
+    return new TaskBoardHostService(gateway, {
+      ledger,
+      power: new PowerInhibitor({ platform: 'linux' }),
+      now: () => NOW,
+    })
+  }
+
+  function pinnedLedger(input: Partial<Parameters<typeof createTask>[0]> & { schedule?: { enabled: boolean; cron: string } }): HostTaskLedger {
+    const ledger = new HostTaskLedger(root(), () => NOW)
+    ledger.applyRequest('seed', {
+      kind: 'create',
+      id: 'card',
+      input: {
+        title: 'Pinned', description: '', prompt: 'work', sessionId: FIXED,
+        ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
+      },
+    })
+    return ledger
+  }
+
+  it('user running a pinned card continues in that session without creating one', async () => {
+    const ledger = pinnedLedger({})
+    const { gateway, created, prompts } = fixedSessionGateway([{ sessionId: FIXED, running: false }])
+    const service = serviceFor(ledger, gateway)
+
+    service.apply('run-1', { kind: 'run', taskId: 'card' })
+    await flushLaunchChain()
+
+    expect(created).toEqual([])
+    expect(prompts.map(entry => entry.sessionId)).toEqual([FIXED])
+    const execution = ledger.state().tasks[0].executions[0]
+    expect(execution.sessionId).toBe(FIXED)
+    service.dispose()
+  })
+
+  it('user running a pinned card whose session is gone fails closed before any prompt', async () => {
+    const ledger = pinnedLedger({})
+    const { gateway, created, prompts } = fixedSessionGateway([{ sessionId: 'session-other', running: false }])
+    const service = serviceFor(ledger, gateway)
+
+    service.apply('run-1', { kind: 'run', taskId: 'card' })
+    await flushLaunchChain()
+
+    const task = ledger.state().tasks[0]
+    expect(task.status).toBe('failed')
+    expect(task.executions[0].error).toContain(FIXED)
+    expect(created).toEqual([])
+    expect(prompts).toEqual([])
+    service.dispose()
+  })
+
+  it('user running a pinned card whose session is busy fails closed before any prompt', async () => {
+    const ledger = pinnedLedger({})
+    const { gateway, created, prompts } = fixedSessionGateway([{ sessionId: FIXED, running: true }])
+    const service = serviceFor(ledger, gateway)
+
+    service.apply('run-1', { kind: 'run', taskId: 'card' })
+    await flushLaunchChain()
+
+    const task = ledger.state().tasks[0]
+    expect(task.status).toBe('failed')
+    expect(task.executions[0].error).toContain('running')
+    expect(created).toEqual([])
+    expect(prompts).toEqual([])
+    service.dispose()
+  })
+
+  it('user running a pinned card with an unreadable roster fails closed instead of guessing', async () => {
+    const ledger = pinnedLedger({})
+    const { gateway, created, prompts } = fixedSessionGateway('unavailable')
+    const service = serviceFor(ledger, gateway)
+
+    service.apply('run-1', { kind: 'run', taskId: 'card' })
+    await flushLaunchChain()
+
+    const task = ledger.state().tasks[0]
+    expect(task.status).toBe('failed')
+    expect(task.executions[0].error).toContain(FIXED)
+    expect(created).toEqual([])
+    expect(prompts).toEqual([])
+    service.dispose()
+  })
+
+  it('user running a session-pinned card as a team is refused: a Lead is always minted fresh', async () => {
+    const ledger = pinnedLedger({})
+    ledger.applyRequest('team-on', { kind: 'update', taskId: 'card', patch: { teamRun: true } })
+    const { gateway, created, prompts } = fixedSessionGateway([{ sessionId: FIXED, running: false }])
+    // A deployment that DOES serve Agent Teams, so the refusal comes from the
+    // pin and not from the missing service.
+    const service = new TaskBoardHostService(gateway, {
+      ledger,
+      power: new PowerInhibitor({ platform: 'linux' }),
+      now: () => NOW,
+      team: { async spawn() { return { sessionId: 'member-x' } } },
+    })
+
+    service.apply('run-1', { kind: 'run', taskId: 'card' })
+    await flushLaunchChain()
+
+    const task = ledger.state().tasks[0]
+    expect(task.status).toBe('failed')
+    expect(task.executions[0].error).toContain('team')
+    expect(created).toEqual([])
+    expect(prompts).toEqual([])
+    service.dispose()
+  })
+
+  it('a scheduled occurrence whose pinned session is gone refunds its run instead of spending it', async () => {
+    let now = new Date(2026, 7, 16, 10, 0, 30).getTime()
+    const ledger = pinnedLedger({ schedule: { enabled: true, cron: '* * * * *' } })
+    const { gateway, created, prompts } = fixedSessionGateway([{ sessionId: 'session-other', running: false }])
+    const probe = timerProbe()
+    const service = new TaskBoardHostService(gateway, {
+      ledger,
+      power: new PowerInhibitor({ platform: 'linux' }),
+      timers: probe.timers,
+      now: () => now,
+    })
+    service.start()
+
+    now = new Date(2026, 7, 16, 10, 1, 0).getTime()
+    await probe.trigger()
+
+    // The occurrence created no session, so its run comes back and the rule
+    // stays armed for the next minute instead of burning budget on a dead pin.
+    const task = ledger.state().tasks[0]
+    expect(task.schedule?.runCount).toBe(0)
+    expect(task.schedule?.skippedReason).toBe('launch-failed')
+    expect(created).toEqual([])
+    expect(prompts).toEqual([])
+    expect(probe.delay).toBe(60_000)
+    service.dispose()
+  })
+})

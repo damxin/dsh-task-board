@@ -392,6 +392,16 @@ export interface TaskRecord {
    */
   workspaceId?: string
   /**
+   * Existing DSH session this card always runs inside, instead of the launch
+   * path minting a fresh conversation (or honouring `reuseSession`). It is the
+   * user's own target choice and therefore NEVER inherited from an ancestor:
+   * a cascade opens its members concurrently, and N members prompting into one
+   * conversation would interleave into one unattributable transcript. Absent
+   * keeps the historical behavior. Whether the pin may be honored at all is
+   * decided by `core/session-target.ts`.
+   */
+  sessionId?: string
+  /**
    * Agent preset the execution session must be composed from (an
    * `agentPreset.list` id); absent means the deployment default.
    */
@@ -538,6 +548,14 @@ export interface NewTaskInput {
   parentId?: string
   /** Workspace the execution must run in; empty/absent = the creating session's workspace for a root task, else the recent workspace at execution time. */
   workspaceId?: string
+  /**
+   * Existing DSH session this card always runs inside; empty/absent = mint a
+   * fresh conversation as usual. Unlike every other execution target this is
+   * taken from the input alone — the parent's own pin is never copied onto a
+   * new subtask (see {@link TaskRecord.sessionId} for why a cascade may not
+   * share one conversation).
+   */
+  sessionId?: string
   /** Agent preset the execution session must be composed from; empty/absent = deployment default. */
   mode?: string
   /** Permission preset applied to the execution session; absent = session default. */
@@ -715,6 +733,9 @@ export function createTask(input: NewTaskInput, now: number, id: string): TaskRe
     updatedAt: now,
     executions: [],
     workspaceId: normalizeTargetId(input.workspaceId),
+    // The pinned session is normalized like every other target string, so a
+    // blank pin collapses to "no pin" and the card mints a fresh conversation.
+    sessionId: normalizeTargetId(input.sessionId),
     mode: normalizeTargetId(input.mode),
     permission: isTaskPermission(input.permission) ? input.permission : undefined,
     model: normalizeTargetId(input.model),

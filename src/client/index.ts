@@ -27,6 +27,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { BoardController, TASK_BOARD_PANEL_ID, type ExecutionModelOption, type ExecutionPresetOption } from '../core/controller.ts'
 import { modelOptionsFromCatalog, modelOptionsFromDiscoveredModels } from './board/model-options.ts'
 import { presetOptionsFromRoster, readPresetRoster, type PresetRemote } from './board/preset-roster.ts'
+import { sessionOptionsFromCatalog } from './board/session-options.ts'
 import { mainViewSessionId } from './main-session.ts'
 import { LocalStorageTaskStore } from '../core/store.ts'
 import { claimTaskboardApply, releaseTaskboardApply } from './apply-guard.ts'
@@ -332,6 +333,21 @@ export function apply(ctx: ClientContext): void {
     }
     pushWorkspaceOptions()
     disposers.push(workspaces.list.subscribe(pushWorkspaceOptions))
+    // The session picker reads the same kind of source: runtime facts (which
+    // conversations exist right now), not ledger state, pushed into the
+    // controller on change. A failed or absent catalog must never throw into
+    // the mount path — it just leaves the picker with the empty option until
+    // the store answers.
+    const pushSessionOptions = (): void => {
+      try {
+        const byId: unknown = sessions.list.getSnapshot().byId
+        controller.setExecutionOptions({ sessions: sessionOptionsFromCatalog(byId) })
+      } catch (error) {
+        console.error('[dsh-task-board] session options read failed', error)
+      }
+    }
+    pushSessionOptions()
+    disposers.push(sessions.list.subscribe(pushSessionOptions))
     // "New project" on the board is the GUI's own add-project call (#1536);
     // the runtime emits the created Workspace through workspaces.list, which
     // refreshes the filter above without a local re-read.

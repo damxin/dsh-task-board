@@ -72,6 +72,11 @@ export function applyCreateTask(
   const effective: NewTaskInput = {
     ...input,
     workspaceId: input.workspaceId ?? parent?.workspaceId,
+    // The pinned session is explicit user intent and NEVER falls back to the
+    // parent's own pin: a cascade runs its members concurrently, so sharing
+    // the parent's conversation would interleave the runs inside one
+    // transcript. An unset sessionId on the input therefore stays unset.
+    sessionId: input.sessionId,
     mode: seed.mode,
     permission: isTaskPermission(seed.permission) ? seed.permission : undefined,
     model: seed.model,

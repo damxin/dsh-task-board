@@ -169,6 +169,31 @@ describe('HostExecutionRunner', () => {
     expect(promptPayloads).toEqual([{ sessionId: 'session-existing', requestId: expect.any(String), mode: 'queue', content: [{ type: 'text', text: 'do work' }] }])
   })
 
+  it('does not consult the workspace pin when continuing in an existing session', async () => {
+    // A session-pinned card keeps a stale workspace pin behind (the user pinned
+    // the session, then the workspace was removed elsewhere): the session's own
+    // workspace governs, so the run must not fail on the workspace pin.
+    const list = vi.fn(() => [{ id: 'workspace-a' }])
+    const commands = { execute: vi.fn(async () => ({ kind: 'success' as const })) }
+    const gateway = {
+      stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 0, false) } })),
+      invoke: fakeInvoke(async (request: GatewayRequest) => {
+        if (request.namespace === 'agentPresets') return { presets: [{ id: 'preset-a', isDefault: false }] }
+        if (request.method === 'projections') return { asOfSeq: 1, values: { agentPreset: 'preset-a' } }
+        if (request.method === 'prompt') return { accepted: true }
+        throw new Error('continue must not call session/' + request.method)
+      }),
+    }
+    const registry = { list } as unknown as { list(): readonly Workspace[] }
+    await expect(
+      new HostExecutionRunner(gateway, commands, registry).launch(
+        { ...configuredTask(), workspaceId: 'workspace-gone' },
+        { reuseSessionId: 'session-existing' },
+      ),
+    ).resolves.toBe('session-existing')
+    expect(list).not.toHaveBeenCalled()
+  })
+
   it('reports the reused session when the reuse prompt fails (#1419)', async () => {
     const gateway = {
       stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 0, false) } })),

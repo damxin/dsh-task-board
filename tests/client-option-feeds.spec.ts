@@ -33,14 +33,16 @@ function unavailableSettingsForm() {
   }
 }
 
-function applyContext() {
+function applyContext(sessionCatalog: unknown = {}) {
   const disposers: Array<() => void> = []
   const registrations: Array<{ name: string; options: Record<string, unknown> }> = []
   /** Scoped-inject callbacks parked until their namespace is mounted. */
   const parked: Array<() => void> = []
   let presetNamespace: { list: () => Promise<unknown> } | undefined
   const services: Record<string, unknown> = {
-    sessions: { list: { getSnapshot: () => ({ byId: {} }), subscribe: () => () => {} } },
+    // The session catalog is the client store the session picker reads; the
+    // sidebar's own navigation face shares it, so it is always present.
+    sessions: { list: { getSnapshot: () => ({ byId: sessionCatalog }), subscribe: () => () => {} } },
     workspaces: { list: { getSnapshot: () => ({ items: [] }), subscribe: () => () => {} }, create: async () => ({ workspaceId: 'w1' }) },
     // The `remote` service is the cordis traced proxy: reading a nested
     // namespace the caller never injected throws, exactly as in the page.
@@ -109,7 +111,7 @@ function applyContext() {
 /** The board controller the panel page receives through its slot injection. */
 function boardController(registrations: Array<{ name: string; options: Record<string, unknown> }>) {
   const page = registrations.find(entry => entry.name === 'main')
-  const inject = page?.options.inject as (() => { controller: { getSnapshot: () => { executionOptions: { presets?: readonly unknown[] } } } }) | undefined
+  const inject = page?.options.inject as (() => { controller: { getSnapshot: () => { executionOptions: { presets?: readonly unknown[]; sessions?: readonly unknown[] } } } }) | undefined
   return inject?.().controller
 }
 
@@ -184,5 +186,39 @@ describe('task-board client execution-target option feeds', () => {
     } finally {
       console.error = originalError
     }
+  })
+
+  it('operator opening the session picker sees the deployment conversations, most recent first', async () => {
+    // Given a page whose session catalog holds two conversations
+    const { ctx, registrations } = applyContext({
+      'session-a': { id: 'session-a', title: 'Refactor the parser', running: false, updatedAt: 10 },
+      'session-b': { id: 'session-b', displayTitle: 'dsh-task-board', cwd: 'D:/work/board', running: true, updatedAt: 20 },
+      'session-blank': { id: 'session-blank', blank: true, updatedAt: 30 },
+    })
+
+    // When the plugin applies
+    apply(ctx)
+    await settle()
+
+    // Then the controller carries those rows as picker options — the throwaway
+    // blank conversation the GUI keeps around is not something a card can run in
+    expect(boardController(registrations)?.getSnapshot().executionOptions.sessions).toEqual([
+      { sessionId: 'session-b', title: 'dsh-task-board', running: true, updatedAt: 20 },
+      { sessionId: 'session-a', title: 'Refactor the parser', running: false, updatedAt: 10 },
+    ])
+  })
+
+  it('operator on a page whose session catalog is unreadable keeps the board alive with an empty picker', async () => {
+    // Given a session store that answers with something no catalog shape
+    const { ctx, registrations, disposers } = applyContext(undefined)
+
+    // When the plugin applies
+    apply(ctx)
+    await settle()
+
+    // Then the board still mounts and the picker simply offers no session
+    expect(registrations.map(entry => entry.name)).toContain('main')
+    expect(boardController(registrations)?.getSnapshot().executionOptions.sessions).toEqual([])
+    expect(() => { for (const dispose of disposers) dispose() }).not.toThrow()
   })
 })

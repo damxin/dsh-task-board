@@ -163,6 +163,7 @@ function taskSummary(
     ...(task.archivedAt === undefined ? {} : { archivedAt: task.archivedAt }),
     ...(task.tags === undefined ? {} : { tags: task.tags.map(tagView) }),
     ...(task.workspaceId === undefined ? {} : { workspaceId: task.workspaceId }),
+    ...(task.sessionId === undefined ? {} : { sessionId: task.sessionId }),
     ...(task.mode === undefined ? {} : { mode: task.mode }),
     ...(task.permission === undefined ? {} : { permission: task.permission }),
     ...(task.model === undefined ? {} : { model: task.model }),
@@ -588,6 +589,7 @@ function buildCreateTool(host: TaskBoardToolHost): ToolDefinition {
     description: [
       'Create a task on the DSH task board, or a subtask by passing parentId.',
       'A subtask inherits every execution target it does not override (workspace, agent preset, permission, model, reasoning effort) from its parent, and inherits the parent human permission confirmation together with an inherited binding.',
+      'The pinned execution session is the one target a subtask NEVER inherits: a session pin names one concrete conversation and belongs to the card that pinned it.',
       'The deployment caps subtask depth (default one level, maximum three): a subtask of a subtask is refused unless the board is configured deeper.',
       'The task lands in the todo column and does NOT run; call task_board_run to execute it.',
     ].join(' '),
@@ -597,6 +599,7 @@ function buildCreateTool(host: TaskBoardToolHost): ToolDefinition {
       prompt: { type: 'string', description: 'The instruction sent to the execution agent; the title is used when blank.' },
       parentId: { type: 'string', description: 'Parent task id, making this a subtask. Omit for a root task.' },
       workspaceId: { type: 'string', description: 'Workspace id the execution must run in; omit to inherit the workspace this session is in (root task) or the parent value (subtask).' },
+      sessionId: { type: 'string', description: 'Pin an EXISTING DSH session id as the execution target of this card: every execution of the card (manual or scheduled) continues inside that conversation instead of creating a fresh one. The session own workspace, preset and model state govern the run — the card workspace pin is not consulted while the pin lasts. The pin supersedes reuseSession and is NOT inherited by subtasks. A pin the Host cannot honor fails the run closed BEFORE any prompt is queued: a missing session, a busy one (running another turn), a session that cannot be verified (unreadable session roster), or a pin on a teamRun card (a team run always mints a fresh Lead session). Omit for a fresh conversation per run.' },
       mode: { type: 'string', description: 'Agent preset id the execution session is composed from; omit to adopt the board new-card default, and the deployment default when none is configured.' },
       permission: { type: 'string', enum: [...TASK_PERMISSIONS], description: 'Permission preset for the execution session; omit to adopt the board new-card default. An omitted permission is never taken from a parent: the launch resolves the parent binding instead. A value above the session default needs a human confirmation in the board UI before the card can run.' },
       model: { type: 'string', description: 'Pinned model as provider/model (or a model id); omit to adopt the board new-card default, and the host default when none is configured.' },
@@ -644,6 +647,7 @@ function buildCreateTool(host: TaskBoardToolHost): ToolDefinition {
         prompt: args.prompt ?? '',
         ...(args.parentId === undefined || args.parentId === '' ? {} : { parentId: args.parentId }),
         ...(args.workspaceId === undefined || args.workspaceId === '' ? {} : { workspaceId: args.workspaceId }),
+        ...(args.sessionId === undefined || args.sessionId === '' ? {} : { sessionId: args.sessionId }),
         ...(args.mode === undefined || args.mode === '' ? {} : { mode: args.mode }),
         ...(args.permission === undefined ? {} : { permission: args.permission }),
         ...(args.model === undefined || args.model === '' ? {} : { model: args.model }),
@@ -684,7 +688,7 @@ function buildUpdateTool(host: TaskBoardToolHost): ToolDefinition {
   return defineTool({
     name: 'task_board_update',
     description: [
-      'Edit a task board card: title, description, prompt, labels, and the execution targets (workspace, agent preset, permission, model, reasoning effort, session reuse).',
+      'Edit a task board card: title, description, prompt, labels, and the execution targets (workspace, pinned session, agent preset, permission, model, reasoning effort, session reuse).',
       'Only the fields you pass change; pass an empty string to clear a target, or an empty labels array to clear the labels.',
       'Title, description and prompt freeze once the task has started executing; the execution targets stay editable because they only affect future runs.',
       'Changing the pinned permission re-arms the permission confirmation gate.',
@@ -695,6 +699,7 @@ function buildUpdateTool(host: TaskBoardToolHost): ToolDefinition {
       description: { type: 'string', description: 'New description.' },
       prompt: { type: 'string', description: 'New execution prompt.' },
       workspaceId: { type: 'string', description: 'New workspace id; an empty string clears it.' },
+      sessionId: { type: 'string', description: 'New pinned execution session id; an empty string clears the pin. While pinned, every execution continues in that conversation (superseding reuseSession) and an unusable pin — missing, busy, unverifiable roster, or a teamRun card — fails the run before any prompt.' },
       mode: { type: 'string', description: 'New agent preset id; an empty string clears it.' },
       // `enum` with a clearing value would advertise the empty string as a
       // legal member of the enum. Some OpenAI-compatible gateways forward the
@@ -737,6 +742,9 @@ function buildUpdateTool(host: TaskBoardToolHost): ToolDefinition {
       if (has(args, 'description') && typeof args.description === 'string') patch.description = args.description
       if (has(args, 'prompt') && typeof args.prompt === 'string') patch.prompt = args.prompt
       if (has(args, 'workspaceId') && typeof args.workspaceId === 'string') patch.workspaceId = args.workspaceId
+      // An empty session id is the wire's clearing value: the card falls back
+      // to a fresh conversation per run (or the reuse opt-in's own session).
+      if (has(args, 'sessionId') && typeof args.sessionId === 'string') patch.sessionId = args.sessionId
       if (has(args, 'mode') && typeof args.mode === 'string') patch.mode = args.mode
       if (has(args, 'model') && typeof args.model === 'string') patch.model = args.model
       // An empty effort is the wire's clearing value (back to the model's own default).

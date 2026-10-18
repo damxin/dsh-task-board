@@ -289,10 +289,12 @@ export function effectiveTaskPermission(task: TaskRecord): TaskRecord['permissio
  * wins, and an unset target inherits the nearest ancestor up to the root.
  * Workspace, agent preset, model and reasoning effort inherit the ancestor's
  * PIN only — a handover bundle is a per-card continuation artefact and is never
- * inherited. The permission inherits the ancestor's EFFECTIVE binding, and its
- * human confirmation travels with it, so a subtask of an already-confirmed
- * elevated card is runnable while a subtask's own unconfirmed binding stays
- * gated.
+ * inherited. The pinned session (`sessionId`) is never inherited at all: it
+ * names one specific conversation and a cascade runs its members concurrently
+ * (see the note inside this function). The permission inherits the ancestor's
+ * EFFECTIVE binding, and its human confirmation travels with it, so a subtask
+ * of an already-confirmed elevated card is runnable while a subtask's own
+ * unconfirmed binding stays gated.
  */
 /**
  * The immutable teammate name for one team-mode member. Teammate names are
@@ -349,6 +351,13 @@ export function resolveExecutionTargets(
     }
     return undefined
   }
+  // `sessionId` is deliberately NOT in that key set: a pinned session is one
+  // user's choice of a specific conversation, not a deployment target a
+  // subtask can borrow. A cascade opens its members concurrently, so N members
+  // resolved onto the ancestor's pinned session would interleave their turns
+  // inside one transcript and make every settlement unattributable — the same
+  // reason a team run must mint its own Lead session. Each card that wants a
+  // pinned conversation carries its own id; unset stays unset.
   // The model pin is the boundary of the effort: an effort is only ever taken
   // from the card the model came from, or from the card that pinned it below
   // that one. A card with a model of its own thus sends NO effort when it stores

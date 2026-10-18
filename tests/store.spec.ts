@@ -202,6 +202,24 @@ describe('parseLedger', () => {
     expect(parseLedger(JSON.stringify([{ ...pinned, reasoningEffort: 3 }]))).toEqual([])
   })
 
+  it('round-trips a session pin and repairs a blank or non-string one', () => {
+    const pinned = createTask(
+      { title: 'pinned', description: '', prompt: '', sessionId: '  session-a  ' },
+      1,
+      't-pin',
+    )
+    expect(pinned.sessionId).toBe('session-a')
+    const parsed = parseLedger(JSON.stringify([pinned]))
+    expect(parsed[0].sessionId).toBe('session-a')
+
+    // A blank string clears the pin; a non-string is an invalid row.
+    const cleared = parseLedger(JSON.stringify([{ ...pinned, sessionId: '   ' }]))
+    expect(cleared).toHaveLength(1)
+    expect(cleared[0].sessionId).toBeUndefined()
+    expect(parseLedger(JSON.stringify([{ ...pinned, sessionId: 42 }]))).toEqual([])
+    expect(isTaskRecord({ ...pinned, sessionId: 42 })).toBe(false)
+  })
+
   it('keeps the session-reuse opt-in and normalizes a bare false (#1419)', () => {
     const optedIn = createTask({ title: 'reuse', description: '', prompt: '', reuseSession: true }, 1, 't-reuse')
     expect(parseLedger(JSON.stringify([optedIn]))[0].reuseSession).toBe(true)

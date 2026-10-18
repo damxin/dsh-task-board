@@ -16,7 +16,7 @@ import type { TaskHandoverInput } from '../handover.ts'
  * Editable fields on a task (the update patch surface). `freeze` replaces the
  * continuation-card snapshot (restamping frozenAt); an explicit null clears it.
  */
-export type TaskUpdatePatch = Partial<Pick<TaskRecord, 'title' | 'description' | 'prompt' | 'workspaceId' | 'mode' | 'permission' | 'model' | 'reasoningEffort' | 'reuseSession' | 'teamRun' | 'goalRun' | 'skipVerification'>> & {
+export type TaskUpdatePatch = Partial<Pick<TaskRecord, 'title' | 'description' | 'prompt' | 'workspaceId' | 'sessionId' | 'mode' | 'permission' | 'model' | 'reasoningEffort' | 'reuseSession' | 'teamRun' | 'goalRun' | 'skipVerification'>> & {
   freeze?: FreezeSnapshot & { redacted?: boolean } | null
   /** Replaces the handover bundle (restamping bundledAt); an explicit null clears it. */
   handover?: TaskHandoverInput | null
@@ -79,6 +79,10 @@ export function applyUpdateTask(
     if (task.id !== id) return task
     const { freeze: freezePatch, handover: handoverPatch, tags: tagsPatch, ...rest } = patch
     const workspaceId = 'workspaceId' in patch ? normalizeTargetId(patch.workspaceId) : undefined
+    // A pinned session follows the same present-set/blank-clear convention as
+    // every other target string: blank text returns the card to minting a
+    // fresh conversation rather than storing an id that can never resolve.
+    const sessionId = 'sessionId' in patch ? normalizeTargetId(patch.sessionId) : undefined
     const mode = 'mode' in patch ? normalizeTargetId(patch.mode) : undefined
     const permission = 'permission' in patch ? normalizePermission(task.permission, patch.permission) : undefined
     const model = 'model' in patch ? normalizeTargetId(patch.model) : undefined
@@ -119,6 +123,7 @@ export function applyUpdateTask(
     // inheriting the board-wide switch and stores nothing.
     if ('skipVerification' in patch) next.skipVerification = patch.skipVerification === true ? true : undefined
     if (workspaceId !== undefined || 'workspaceId' in patch) next.workspaceId = workspaceId
+    if (sessionId !== undefined || 'sessionId' in patch) next.sessionId = sessionId
     if (mode !== undefined || 'mode' in patch) next.mode = mode
     if (permission !== undefined || 'permission' in patch) next.permission = permission
     if (model !== undefined || 'model' in patch) next.model = model

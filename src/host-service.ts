@@ -2,6 +2,7 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { DEFAULT_RUN_LAUNCH_WIDTH, normalizeRunLaunchWidth } from './core/launch-width.ts'
 import { DEFAULT_SESSION_POLL_SECONDS, normalizeSessionPollSeconds, sessionPollMs } from './core/poll-cadence.ts'
 import { reusableSessionId } from './core/session-reuse.ts'
+import { sessionTarget } from './core/session-target.ts'
 import { LaunchAdmissionQueue, type QueuedLaunch } from './host/launch-admission.ts'
 import { HostTaskLedger, type OpenedRun, type OpenExecutionReference } from './host-ledger.ts'
 import { HostExecutionRunner, SessionLaunchError, promptText, type SessionCommandDispatcher, type SessionSummary, type TaskBoardWorkspaceRegistry } from './host-runner.ts'
@@ -195,6 +196,27 @@ function cardDefaultsOf(defaults: CardDefaults): TaskBoardSnapshot['cardDefaults
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   }
   return Object.keys(published).length === 0 ? undefined : published
+}
+
+/**
+ * The failure message one unusable session pin produces — the text an operator
+ * reads on the failed card. Each reason names its own fact and its own remedy:
+ * a missing session is not a busy one, an unreadable roster is not a team
+ * collision, and only the team case is fixable on the card itself. The board
+ * fails closed on a pin it cannot honor (no prompt is ever queued into a
+ * session the Host could not verify), so this message is the whole report.
+ */
+function unusablePinnedSession(sessionId: string, reason: 'missing' | 'busy' | 'roster-unknown' | 'team'): string {
+  switch (reason) {
+    case 'missing':
+      return 'pinned session not found: ' + sessionId + '; clear the session pin or repin a live session on this card'
+    case 'busy':
+      return 'pinned session is busy (running another turn): ' + sessionId + '; wait for it to go idle, or repin another session'
+    case 'roster-unknown':
+      return 'pinned session could not be verified: ' + sessionId + '; the session roster is unreadable, so the run fails closed until it can be read'
+    case 'team':
+      return 'pinned session cannot serve a team run: ' + sessionId + '; a team run always mints a fresh Lead session, so clear the session pin or turn off teamRun'
+  }
 }
 
 export class TaskBoardHostService {
@@ -600,9 +622,12 @@ export class TaskBoardHostService {
     try {
       // A team run always mints a fresh Lead session: teammates are immutable
       // children of that session, so reusing an older one would collide on
-      // their names and orphan the previous team.
+      // their names and orphan the previous team. An explicit session pin
+      // supersedes the reuse opt-in — every execution of a pinned card
+      // continues in THAT conversation — and {@link pinnedSessionFor} fails
+      // closed on a pin the Host cannot honor, before any prompt is queued.
       const team = opened.task.teamRun === true
-      const reuseSessionId = team ? undefined : await this.reuseSessionFor(opened.task)
+      const reuseSessionId = await this.pinnedSessionFor(opened.task)
       // Both modes tell the launched agent what else this run opens; only a team
       // run names teammates, because only then does this session own them.
       const peers = others.length === 0 ? undefined : others.map(other => ({
@@ -858,6 +883,51 @@ export class TaskBoardHostService {
     }
     if (!running.known) return undefined
     return reusableSessionId(task, new Set(running.items.filter(item => !item.running).map(item => item.sessionId)))
+  }
+
+  /**
+   * The session a card with an explicit `sessionId` pin runs in: every
+   * execution of a pinned card — manual or cron — continues in THAT
+   * conversation, so the pin supersedes the `reuseSession` opt-in and
+   * {@link reuseSessionFor} is never consulted for it. The decision itself is
+   * the pure module's ({@link sessionTarget}), but the roster it reads must be
+   * THIS launch's, for the same freshness rule the reuse probe follows: an
+   * idle board no longer polls, so a cached roster could be hours old — either
+   * refusing a session that has been idle all along, or prompting into one
+   * that started running since. A card that pins nothing reads no roster at
+   * all (an unpinned card must not pay the roster RPC) and keeps today's
+   * behavior unchanged. A pin that cannot be honored throws here, which the
+   * caller's catch settles as a failed launch and refunds for a scheduled
+   * occurrence — the same contract an unusable workspace or preset pin has.
+   * @param task - the task about to run.
+   * @returns the session id to continue in, or undefined for a fresh session.
+   */
+  private async pinnedSessionFor(task: TaskRecord): Promise<string | undefined> {
+    if (task.sessionId === undefined) {
+      // No pin: no roster read. A team run never continues an older session,
+      // and every other card falls back to the reuse opt-in exactly as before.
+      return task.teamRun === true ? undefined : await this.reuseSessionFor(task)
+    }
+    // An unreadable roster is a distinct pin failure, not a probe to shrug off:
+    // unlike the reuse probe (whose unknown roster only ever mints a fresh,
+    // always-safe conversation), a pinned card PROMISES a specific conversation,
+    // and prompting into one the Host cannot see is the failure this gate
+    // exists to prevent. A read that throws is treated exactly like a roster
+    // that reports itself unknown.
+    let roster: { known: boolean; sessions: readonly { sessionId: string; running: boolean }[] } | undefined
+    try {
+      const running = await this.runner.listRunning()
+      roster = running.known
+        ? { known: true, sessions: running.items.map(item => ({ sessionId: item.sessionId, running: item.running })) }
+        : undefined
+    } catch (error) {
+      this.notePollFailure()
+      safeConsoleError('[dsh-task-board] session roster read for the pinned-session check failed; the pinned run fails closed', error)
+    }
+    const target = sessionTarget(task, roster)
+    if (target.kind === 'pinned') return target.sessionId
+    if (target.kind === 'fresh') return undefined
+    throw new Error(unusablePinnedSession(target.sessionId, target.reason))
   }
 
   /** Reuse the session list this poll already fetched: one list RPC per tick, not 1 + E. */

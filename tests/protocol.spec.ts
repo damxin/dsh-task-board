@@ -196,6 +196,37 @@ describe('task-board action protocol', () => {
     })).toBeUndefined()
   })
 
+  it('accepts a session pin in create input and update patch, and refuses a malformed one', () => {
+    expect(parseActionEnvelope({
+      requestId: 'create-pinned',
+      action: { kind: 'create', id: 'task-pinned', input: { title: 'P', description: '', prompt: 'p', sessionId: 'session-a' } },
+    })?.action.kind).toBe('create')
+
+    // A string sets or clears the pin (blank clears through ledger normalization);
+    // anything else is rejected outright.
+    expect(parseActionEnvelope({
+      requestId: 'update-pinned-clear',
+      action: { kind: 'update', taskId: 'task-pinned', patch: { sessionId: '' } },
+    })?.action.kind).toBe('update')
+    expect(parseActionEnvelope({
+      requestId: 'update-pinned-bad',
+      action: { kind: 'update', taskId: 'task-pinned', patch: { sessionId: 42 } },
+    })).toBeUndefined()
+    expect(parseActionEnvelope({
+      requestId: 'create-pinned-bad',
+      action: { kind: 'create', id: 'task-pinned', input: { title: 'P', description: '', prompt: 'p', sessionId: true } },
+    })).toBeUndefined()
+  })
+
+  it('operator importing a card keeps its session pin and refuses a malformed one', () => {
+    const pinned = { ...createTask({ title: 'A', description: '', prompt: '' }, 1, 'task-a'), sessionId: 'session-a' }
+    const kept = parseActionEnvelope({ requestId: 'import-pin', action: { kind: 'import', sourceId: 'browser', tasks: [pinned] } })
+    expect(kept?.action.kind === 'import' ? kept.action.tasks[0] : undefined).toMatchObject({ sessionId: 'session-a' })
+    expect(parseActionEnvelope({ requestId: 'import-pin-bad', action: {
+      kind: 'import', sourceId: 'browser', tasks: [{ ...pinned, sessionId: 7 }],
+    } })).toBeUndefined()
+  })
+
   it('accepts benign future import fields but rejects executable command fields', () => {
     const valid = createTask({ title: 'A', description: '', prompt: '' }, 1, 'task-a')
     expect(parseActionEnvelope({ requestId: 'ok', action: { kind: 'import', sourceId: 'browser', tasks: [valid] } })).toBeDefined()

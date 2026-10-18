@@ -185,6 +185,21 @@ describe('subtask target inheritance', () => {
     expect(child.model).toBeUndefined()
   })
 
+  it('a session pin never travels down the lineage', () => {
+    // Given a parent that pins a session
+    const root = task('root', { sessionId: 'session-a', workspaceId: 'ws-1' })
+
+    // When a subtask without its own pin is created and its launch targets resolved
+    const created = applyCreateTask([root], { title: 'a', description: '', prompt: 'p', parentId: 'root' }, NOW, 'a')
+    const child = created.task as TaskRecord
+
+    // Then neither the created card nor the resolved targets carry the pin:
+    // a cascade runs its members concurrently, and members prompting into one
+    // conversation would interleave their turns.
+    expect(child.sessionId).toBeUndefined()
+    expect(resolveExecutionTargets(child, [root, child]).sessionId).toBeUndefined()
+  })
+
   it('user creating a subtask of a continuation card resolves the bundle permission at launch', () => {
     // Given a parent whose handover bundle pins an elevated permission
     const parent = task('root', {

@@ -69,6 +69,12 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
   // confirmation, while picking a value pins this card's own binding and
   // re-arms the gate. A parent's permission never travels here at all.
   const [workspaceId, setWorkspaceId] = useState(initialTask?.workspaceId ?? parentTask?.workspaceId ?? defaultWorkspaceId ?? '')
+  // A session pin does NOT travel the way a workspace does: a source or parent
+  // card's conversation is that card's own place to run, and pointing a new
+  // card's cascade at it would interleave unrelated turns into one transcript.
+  // Only an explicit duplicate keeps the original card's pin; everything else
+  // starts on "new session every run".
+  const [sessionId, setSessionId] = useState(initialTask?.sessionId ?? '')
   const [mode, setMode] = useState(seed.mode)
   const [permission, setPermission] = useState(seed.permission)
   const [model, setModel] = useState(seed.model)
@@ -127,6 +133,7 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
   // Keep it selectable as a stale row, so the field shows what the create
   // action will actually send instead of silently displaying the default.
   const workspaceKnown = workspaceId === '' || options.workspaces.some(item => item.workspaceId === workspaceId)
+  const sessionKnown = sessionId === '' || (options.sessions ?? []).some(item => item.sessionId === sessionId)
   const modeKnown = mode === '' || options.presets.some(item => item.id === mode)
   const modelKnown = model === '' || models.some(item => item.id === model)
 
@@ -241,6 +248,7 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
       // dialog opened prefilled really unpins it. This dialog never sends
       // `applyCardDefaults` — the prefill above is the whole feature here.
       ...(workspaceId === '' ? {} : { workspaceId }),
+      ...(sessionId === '' ? {} : { sessionId }),
       ...(mode === '' ? {} : { mode }),
       ...(permission === '' ? {} : { permission: permission as TaskPermission }),
       ...(model === '' ? {} : { model }),
@@ -325,6 +333,10 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
   const workspaceLabel = workspaceId === ''
     ? t('exec.workspace.recent')
     : options.workspaces.find(item => item.workspaceId === workspaceId)?.title ?? workspaceId
+  const sessionLabel = sessionId === ''
+    ? t('exec.session.everyRun')
+    : (options.sessions ?? []).find(item => item.sessionId === sessionId)?.title
+      ?? `${sessionId}${t('exec.session.removed')}`
   const permissionLabel = permission === ''
     ? inheritedPermission === undefined
       ? t('exec.permission.default')
@@ -342,6 +354,7 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
   // collapsed line, so it is summarized only once it is actually pinned.
   const executionSummary = [
     workspaceLabel,
+    sessionLabel,
     modeLabel,
     permissionLabel,
     ...(model === '' ? [] : [modelSummary]),
@@ -481,12 +494,35 @@ export function NewTaskModal({ controller, onClose, initialTask, defaultWorkspac
           <select
             className={css.select}
             value={workspaceId}
+            // A pinned session decides where the run lands (that conversation's
+            // own workspace governs), so the workspace picker stands down
+            // instead of letting the card carry two competing targets.
+            disabled={sessionId !== ''}
             onChange={event => { setWorkspaceId(event.target.value) }}
           >
             <option value="">{t('exec.workspace.recent')}</option>
             {!workspaceKnown && <option value={workspaceId}>{workspaceId}{t('exec.mode.removed')}</option>}
             {options.workspaces.map(workspace => (
               <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.title}</option>
+            ))}
+          </select>
+        </label>
+        {sessionId !== '' && <p className={css.fieldHint}>{t('exec.session.workspaceHint')}</p>}
+
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{t('new.session')}</span>
+          <select
+            className={css.select}
+            value={sessionId}
+            onChange={event => { setSessionId(event.target.value) }}
+          >
+            <option value="">{t('exec.session.everyRun')}</option>
+            {!sessionKnown && <option value={sessionId}>{sessionId}{t('exec.session.removed')}</option>}
+            {(options.sessions ?? []).map(session => (
+              <option key={session.sessionId} value={session.sessionId}>
+                {session.title}
+                {session.running ? t('exec.session.runningSuffix') : ''}
+              </option>
             ))}
           </select>
         </label>

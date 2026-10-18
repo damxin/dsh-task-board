@@ -160,6 +160,14 @@ export interface TaskBoardTaskDraft {
    * no reason to know better pins nothing.
    */
   workspaceId?: string
+  /**
+   * Existing DSH session the created card always runs inside. Absent keeps
+   * the board's default of minting a fresh conversation per run. Like the
+   * workspace, this is only ever the provider's explicit choice: the field is
+   * never inherited from a parent card, because a cascade runs its members
+   * concurrently and one conversation cannot host them.
+   */
+  sessionId?: string
 }
 
 /** Options of {@link TaskBoardTasksFace.create}. */

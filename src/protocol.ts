@@ -274,6 +274,11 @@ function validImportedKnownFields(value: Record<string, unknown>): boolean {
   // The model pin is carried by the import (with the level bound to it), so a
   // non-string value is refused here like the other carried known fields.
   if (value.model !== undefined && typeof value.model !== 'string') return false
+  // A pinned session rides the import like the other execution targets: it is
+  // the user's own card preference. Whether that session still exists is
+  // re-checked at execution time by core/session-target.ts, so the import only
+  // has to keep a non-string value off the ledger.
+  if (value.sessionId !== undefined && typeof value.sessionId !== 'string') return false
   if (value.integrations !== undefined && normalizeTaskIntegrations(value.integrations) === undefined) return false
   if (value.schedule !== undefined && !validImportedSchedule(value.schedule)) return false
   if (value.executions !== undefined) {
@@ -336,6 +341,11 @@ function importedTask(value: unknown): TaskRecord | undefined {
     // is missing from the merged ledger instead of trusting the export.
     ...(task.parentId === undefined ? {} : { parentId: task.parentId }),
     ...(task.workspaceId === undefined ? {} : { workspaceId: task.workspaceId }),
+    // The pinned session rides the import like the other execution targets:
+    // it is the user's own choice of conversation, not a verdict the Host
+    // would have to re-derive, so dropping it here would silently retarget a
+    // card that was built to continue one specific session.
+    ...(task.sessionId === undefined ? {} : { sessionId: task.sessionId }),
     ...(task.mode === undefined ? {} : { mode: task.mode }),
     // The model pin rides the import together with the level bound to it: the
     // two are one pair, and an imported level without its model would run at
@@ -391,14 +401,14 @@ function handoverPayload(value: unknown): TaskHandoverInput | undefined {
 
 function createInput(value: unknown): value is NewTaskInput {
   const input = record(value)
-  if (input === undefined || !exactKeys(input, ['title', 'description', 'prompt', 'parentId', 'workspaceId', 'mode', 'permission', 'schedule', 'freeze', 'handover', 'model', 'reasoningEffort', 'applyCardDefaults', 'reuseSession', 'teamRun', 'goalRun', 'skipVerification', 'tags', 'integrations'])) return false
+  if (input === undefined || !exactKeys(input, ['title', 'description', 'prompt', 'parentId', 'workspaceId', 'sessionId', 'mode', 'permission', 'schedule', 'freeze', 'handover', 'model', 'reasoningEffort', 'applyCardDefaults', 'reuseSession', 'teamRun', 'goalRun', 'skipVerification', 'tags', 'integrations'])) return false
   if (input.parentId !== undefined && (typeof input.parentId !== 'string' || input.parentId.trim() === '')) return false
   if (typeof input.title !== 'string' || typeof input.description !== 'string' || typeof input.prompt !== 'string') return false
   // The reasoning effort is an adapter-owned id the Host resolves against the
   // live model catalog, so this gate only keeps a malformed value (a number, an
   // object, null) off the ledger; blank text means "inherit" like every other
   // pinned target.
-  if (!optionalString(input.workspaceId) || !optionalString(input.mode) || !optionalString(input.model) || !optionalString(input.reasoningEffort)) return false
+  if (!optionalString(input.workspaceId) || !optionalString(input.sessionId) || !optionalString(input.mode) || !optionalString(input.model) || !optionalString(input.reasoningEffort)) return false
   if (input.applyCardDefaults !== undefined && typeof input.applyCardDefaults !== 'boolean') return false
   if (input.reuseSession !== undefined && typeof input.reuseSession !== 'boolean') return false
   if (input.teamRun !== undefined && typeof input.teamRun !== 'boolean') return false
@@ -426,7 +436,7 @@ function createInput(value: unknown): value is NewTaskInput {
 
 function updatePatch(value: unknown): boolean {
   const patch = record(value)
-  if (patch === undefined || !exactKeys(patch, ['title', 'description', 'prompt', 'workspaceId', 'mode', 'permission', 'freeze', 'handover', 'model', 'reasoningEffort', 'reuseSession', 'teamRun', 'goalRun', 'skipVerification', 'tags'])) return false
+  if (patch === undefined || !exactKeys(patch, ['title', 'description', 'prompt', 'workspaceId', 'sessionId', 'mode', 'permission', 'freeze', 'handover', 'model', 'reasoningEffort', 'reuseSession', 'teamRun', 'goalRun', 'skipVerification', 'tags'])) return false
   // null (or false) clears the reuse opt-in; only a real boolean is accepted.
   if (patch.reuseSession !== undefined && patch.reuseSession !== null && typeof patch.reuseSession !== 'boolean') return false
   if (patch.teamRun !== undefined && patch.teamRun !== null && typeof patch.teamRun !== 'boolean') return false
@@ -436,7 +446,7 @@ function updatePatch(value: unknown): boolean {
   // The acceptance opt-out is the mirror tri-state: null/false return the card
   // to inheriting the board-wide switch, true pins it out of the gate.
   if (patch.skipVerification !== undefined && patch.skipVerification !== null && typeof patch.skipVerification !== 'boolean') return false
-  for (const key of ['title', 'description', 'prompt', 'workspaceId', 'mode', 'model', 'reasoningEffort'] as const) {
+  for (const key of ['title', 'description', 'prompt', 'workspaceId', 'sessionId', 'mode', 'model', 'reasoningEffort'] as const) {
     if (!optionalString(patch[key])) return false
   }
   if (patch.permission !== undefined && !isTaskPermission(patch.permission)) return false

@@ -95,6 +95,17 @@ describe('use-case: update', () => {
     expect(invalid[0].permission).toBe('workspace-write')
   })
 
+  it('sets, clears and blanks the session pin like any other target', () => {
+    const pinned = applyUpdateTask(seed(2), 'id-0', { sessionId: 'session-a' }, NOW + 6)
+    expect(pinned[0].sessionId).toBe('session-a')
+
+    const cleared = applyUpdateTask(pinned, 'id-0', { sessionId: undefined }, NOW + 7)
+    expect(cleared[0].sessionId).toBeUndefined()
+
+    const blanked = applyUpdateTask(seed(2), 'id-0', { sessionId: '   ' }, NOW + 8)
+    expect(blanked[0].sessionId).toBeUndefined()
+  })
+
   it('trims content fields like creation does', () => {
     const updated = applyUpdateTask(seed(2), 'id-0', { title: '  B  ', description: ' d ', prompt: '  p ' }, NOW + 8)
     expect(updated[0].title).toBe('B')
