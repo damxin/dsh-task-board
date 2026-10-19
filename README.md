@@ -5,7 +5,7 @@ English | [中文](README.zh.md)
 <p align="center">
   <img src="https://img.shields.io/npm/v/@linxin666/dsh-task-board?style=flat-square" alt="Version">
   &nbsp;
-  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.1--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
   &nbsp;
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
 </p>
@@ -59,7 +59,7 @@ Cards keep multi-line title and description previews with visible metadata. Prev
 
 The board view renders on first open and keeps its local view state when closed and reopened. Host synchronization, scheduling and execution remain active independently of the view.
 
-- `src/index.ts` mounts the Host service through the official `@deepseek-ai/dsh-api-gateway`, `@deepseek-ai/dsh-workspace`, and `@deepseek-ai/dsh-host-webserver` SDKs.
+- `src/index.ts` mounts the Host service through the official `@deepseek-ai/dsh-api-gateway`, `@deepseek-ai/dsh-workspace`, and `@deepseek-ai/dsh-host-webserver` SDKs, and builds ONE owner `Peer` (from the official `@deepseek-ai/dsh-client-connection` SDK, kept external so the Host's instance is the one that counts) that every in-process Remote invocation speaks for — DSH 0.2.1-rc.2 requires each caller to name its Peer explicitly.
 - `src/host-ledger.ts` serializes actions and persists `{ schemaVersion: 6, revision, tasks, scheduler, recentRequests }` through a temporary file plus atomic rename.
 - `src/host-service.ts` owns schedule firing (a single timer armed at the ledger's nearest target through the host's `timer` service, falling back to process timers when the host serves none), missed-trigger skipping, runner launch, restart reconciliation, and power reasons; the ledger itself owns the run budget, so a one-shot or an exhausted capped rule can never be opened a second time.
 - `src/client/native-panel.tsx` registers the board's sidebar row and center-column page (the official `sidebar.panellist` list seat and the keyed `main` seat) and maintains the center-column exclusivity protocol with the ssh panel.

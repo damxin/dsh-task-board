@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HostTaskLedger } from '../src/host-ledger.ts'
 import { TaskBoardHostService } from '../src/host-service.ts'
 import { PowerInhibitor } from '../src/power-inhibitor.ts'
+import { projectionBaseline } from './projection-wire.ts'
 import {
   resolveContract,
   withAcceptanceDetailCleared,
@@ -93,7 +94,7 @@ function gatewayDouble(): TypertGateway {
     invoke: async (request: { namespace: string; method: string }) => {
       if (request.namespace === 'agentPresets') return { presets: [] }
       if (request.method === 'list') return { items: [{ sessionId: 'session-a', running: false, agentAvailable: false, updatedAt: NOW, blank: false }] }
-      if (request.method === 'projections') return { values: { goal: { goal: { id: 'goal-1', revision: 2, phase: 'complete' }, roundsStarted: 1 } } }
+      if (request.method === 'projections') return projectionBaseline({ goal: { goal: { id: 'goal-1', revision: 2, phase: 'complete' }, roundsStarted: 1 } })
       throw new Error('unexpected gateway call ' + request.namespace + '/' + request.method)
     },
     stream: async () => ({

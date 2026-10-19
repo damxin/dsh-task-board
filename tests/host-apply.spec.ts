@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { Config, apply, resolveExecutionAgent, resolveHostDefaultPermission, resolveSessionController } from '../src/index.ts'
+import { createdPeers } from './host-peer-double.ts'
 
 /** The write protocol a volatile reference shares across cosmokit copies. */
 const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
@@ -195,6 +196,21 @@ describe('host activation settings', () => {
     // When the activation is inspected
     // Then it announces the board in the system prompt
     expect(board.sections()).toEqual(['plugin:task-board'])
+  })
+
+  it('mounting the board builds one owner Peer to speak for its gateway calls', async () => {
+    // Given a clean record of the Peers this process has created
+    createdPeers.length = 0
+
+    // When the board is mounted
+    const board = await mountBoard(Config({ enabled: true }))
+    mounted.push(board)
+
+    // Then exactly one Peer is built, and it speaks for the operator: the
+    // gateway refuses a call that names no Peer (DSH 0.2.1-rc.2) and a Peer
+    // that is not the owner would run every board action through the
+    // Remote-access decision instead of the owner bypass.
+    expect(createdPeers).toEqual([{ principal: { kind: 'owner' }, interactions: undefined }])
   })
 
   it('admin sees the announcement leave the prompt when the row is handed switched off', async () => {

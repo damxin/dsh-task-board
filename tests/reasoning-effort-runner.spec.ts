@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { createTask, type TaskRecord } from '../src/core/tasks.ts'
 import type { ModelCatalogView } from '../src/core/verification.ts'
 import { HostExecutionRunner } from '../src/host-runner.ts'
+import { pendingMigrationProjections, projectionBaseline } from './projection-wire.ts'
 
 interface GatewayRequest {
   namespace: string
@@ -68,9 +69,11 @@ interface Harness {
 
 /**
  * A runner wired to a gateway fake that answers exactly the calls one launch
- * makes. `projections` is either the recorded model-selection reply or the
- * string 'unreadable', which makes the read fail. `rejectSelectModel` makes the
- * model-selection call itself fail, the way a gateway refuses a route.
+ * makes. `projections` is either the recorded model-selection reply, the string
+ * 'unreadable' (which makes the read fail), or 'migration-pending' (which
+ * answers the DSH 0.2.1-rc.2 migration-required variant whose cached hints still
+ * name that selection). `rejectSelectModel` makes the model-selection call
+ * itself fail, the way a gateway refuses a route.
  */
 function harness(modelSelection: unknown = null, options: { rejectSelectModel?: boolean } = {}): Harness {
   const selectModel: Array<Record<string, unknown>> = []
@@ -96,7 +99,10 @@ function harness(modelSelection: unknown = null, options: { rejectSelectModel?: 
       if (request.method === 'projections') {
         projectionReads += 1
         if (modelSelection === 'unreadable') throw new Error('session/projections is unavailable')
-        return { values: { modelSelection } }
+        if (modelSelection === 'migration-pending') {
+          return pendingMigrationProjections({ modelSelection: { lastUsed: { provider: 'deepseek', model: 'deepseek-reasoner' } } })
+        }
+        return projectionBaseline({ modelSelection })
       }
       throw new Error('unexpected gateway call: ' + request.method)
     },
@@ -215,6 +221,21 @@ describe('execution reasoning effort on a reused session', () => {
     await live.runner.launch(card({ reasoningEffort: 'high' }), { reuseSessionId: 'session-old', catalog })
 
     // Then no model is switched and no effort is sent, while the prompt is still queued
+    expect(live.selectModel).toEqual([])
+    expect(live.prompt).toHaveLength(1)
+  })
+
+  it('user running an effort-only card on a session awaiting migration does not switch its model', async () => {
+    // Given a reused session whose log is not migrated yet: the Host answers
+    // with cached hints that still name the LAST USED route, which may be long
+    // out of date
+    const live = harness('migration-pending')
+
+    // When the board launches a card that pins an effort but no model
+    await live.runner.launch(card({ reasoningEffort: 'high' }), { reuseSessionId: 'session-old', catalog })
+
+    // Then the hint is not read as the session's own route: no model is
+    // switched and no effort is sent, while the prompt is still queued
     expect(live.selectModel).toEqual([])
     expect(live.prompt).toHaveLength(1)
   })

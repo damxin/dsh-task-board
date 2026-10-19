@@ -1,4 +1,5 @@
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import type { PeerScope } from '@deepseek-ai/dsh-client-connection'
 import { DEFAULT_RUN_LAUNCH_WIDTH, normalizeRunLaunchWidth } from './core/launch-width.ts'
 import { DEFAULT_SESSION_POLL_SECONDS, normalizeSessionPollSeconds, sessionPollMs } from './core/poll-cadence.ts'
 import { reusableSessionId } from './core/session-reuse.ts'
@@ -321,13 +322,22 @@ export class TaskBoardHostService {
      * is still queueing. Absent means the default width.
      */
     runLaunchWidth?: () => number
+    /**
+     * The owner Peer every Remote call the runner makes speaks for. DSH
+     * 0.2.1-rc.2 requires each in-process caller to name its Peer explicitly
+     * (the gateway's `peer` went from optional to required), so the plugin
+     * entry builds one owner Peer per fiber and hands it here. Absent means a
+     * programmatic mount that never supplied one; the calls then go out exactly
+     * as they did before the requirement.
+     */
+    peer?: PeerScope
   } = {}) {
     this.ledger = options.ledger ?? new HostTaskLedger(undefined, undefined, {
       sessionDefaultPermission: options.sessionDefaultPermission,
       maxSubtaskDepth: options.maxSubtaskDepth,
       cardDefaults: options.cardDefaults,
     })
-    this.runner = new HostExecutionRunner(gateway, options.commandDispatcher, options.workspaceRegistry)
+    this.runner = new HostExecutionRunner(gateway, options.commandDispatcher, options.workspaceRegistry, { peer: options.peer })
     this.workspaceRegistry = options.workspaceRegistry
     this.team = options.team
     this.timers = options.timers ?? PROCESS_TIMERS

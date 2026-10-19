@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTask, type TaskRecord } from '../src/core/tasks.ts'
 import { goalObjective, HostExecutionRunner } from '../src/host-runner.ts'
+import { pendingMigrationProjections, projectionBaseline } from './projection-wire.ts'
 
 type GatewayRequest = {
   namespace: string
@@ -74,23 +75,21 @@ function completedTurnSnapshot() {
 
 /** A goal projection value as session/projections reports it. */
 function goalProjection(phase: string, extra: Record<string, unknown> = {}) {
-  return {
-    values: {
+  return projectionBaseline({
+    goal: {
       goal: {
-        goal: {
-          id: 'goal-1',
-          revision: 2,
-          objective: 'do work',
-          phase,
-          maxGoalRounds: 256,
-          ...extra,
-        },
-        roundsStarted: 3,
-        createdAt: 1,
-        updatedAt: 2,
+        id: 'goal-1',
+        revision: 2,
+        objective: 'do work',
+        phase,
+        maxGoalRounds: 256,
+        ...extra,
       },
+      roundsStarted: 3,
+      createdAt: 1,
+      updatedAt: 2,
     },
-  }
+  })
 }
 
 /** A launch gateway that records the session calls it received. */
@@ -369,5 +368,20 @@ describe('goal-aware settlement', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('operator whose session log awaits migration gets the turn verdict, not the cached hint', async () => {
+    // Given a gateway that answers session/projections with the migration-
+    // required variant, whose cached hints still name an ACTIVE goal
+    const runner = new HostExecutionRunner(inspectGateway(async () => pendingMigrationProjections({
+      goal: { goal: { id: 'goal-1', phase: 'active' }, roundsStarted: 1 },
+    })))
+
+    // When the execution is inspected
+    const outcome = await runner.inspect('session-a', 1_000)
+
+    // Then the unconfirmed phase cannot park the card in the running column:
+    // a stale hint is not evidence that the goal-round driver still owns the run.
+    expect(outcome).toEqual({ outcome: 'succeeded' })
   })
 })

@@ -1,6 +1,7 @@
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { SessionAddress, SessionHistoryRecord, SessionListValue, SessionPage, SessionSummary } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { CommandResult } from '@deepseek-ai/dsh-commands/types'
+import type { PeerScope } from '@deepseek-ai/dsh-client-connection'
 import type { Workspace } from '@deepseek-ai/dsh-workspace/types'
 import { teammateName } from './core/subtask.ts'
 import { mostRecentWorkspaceId } from './core/workspace-target.ts'
@@ -20,6 +21,12 @@ interface GatewayRequest {
   namespace: string
   method: string
   args: Record<string, unknown>
+  /**
+   * Peer the call speaks for. DSH 0.2.1-rc.2 requires every carrier AND every
+   * in-process caller to name it (`peer` went from optional to required), so the
+   * runner carries the board's owner Peer and sends it with each request.
+   */
+  peer?: PeerScope
   signal?: AbortSignal
 }
 
@@ -66,6 +73,41 @@ function isDefinitionWithdrawn(error: unknown): boolean {
 
 const SERVICE_UNAVAILABLE_ATTEMPTS = 5
 const SERVICE_UNAVAILABLE_BACKOFF_MS = 2_000
+
+/** What one `session/projections` answer offers the runner. */
+interface ProjectionRead {
+  /**
+   * The projection values at an exact Session event cursor, or undefined when
+   * the answer carries none the board may act on.
+   */
+  values?: Record<string, unknown>
+  /** The Host deferred the read: this session log still has to be migrated. */
+  pendingMigration?: boolean
+}
+
+/**
+ * Read one `session/projections` answer as evidence.
+ *
+ * DSH 0.2.1-rc.2 turned the answer into a discriminated union: a `sequenced`
+ * variant carries complete values at an exact cursor, while `migration-required`
+ * carries only CACHED HINTS from a session log that has not been migrated yet
+ * (the Host documents it as "cached hints when migration is deferred"), and a
+ * session the Host cannot see answers `null`.
+ *
+ * A hint can still name an agent preset, a recorded model selection or an
+ * `active` goal, so reading `values` without the `kind` would let a stale hint
+ * fail a preset match, silently switch the model of a session this run only
+ * meant to continue, or park an execution in `pending` forever. Only the
+ * sequenced variant is evidence; every other answer reads as unreadable, which
+ * is exactly how each caller already treats a failed read.
+ */
+function readProjections(projections: unknown): ProjectionRead {
+  if (projections === null || typeof projections !== 'object') return {}
+  const answer = projections as { kind?: unknown; values?: unknown }
+  if (answer.kind === 'migration-required') return { pendingMigration: true }
+  if (answer.kind !== 'sequenced' || typeof answer.values !== 'object' || answer.values === null) return {}
+  return { values: answer.values as Record<string, unknown> }
+}
 /**
  * Largest number of history pages one inspection walks back. A session whose
  * window is wider than this cannot be resolved from its log, which the caller
@@ -323,25 +365,35 @@ export class HostExecutionRunner {
   private readonly scanMemos = new Map<string, number>()
   private readonly unavailableAttempts: number
   private readonly unavailableBackoffMs: number
+  private readonly peer: PeerScope | undefined
   private unsupportedSessionListWarned = false
+  /**
+   * The runner talks to the gateway through its own port, so a concrete
+   * `TypertGateway` (whose request type is the SDK's, with `peer` required
+   * since 0.2.1-rc.2) satisfies it structurally while every unit test can keep
+   * passing a two-method fake.
+   */
+  private readonly gateway: SessionGateway
 
   constructor(
-    private readonly gateway: SessionGateway | TypertGateway,
+    gateway: SessionGateway | TypertGateway,
     private readonly commands?: SessionCommandDispatcher,
     private readonly workspaceRegistry?: TaskBoardWorkspaceRegistry,
-    unavailableRetry?: { attempts?: number; backoffMs?: number },
+    gatewayOptions?: { attempts?: number; backoffMs?: number; peer?: PeerScope },
   ) {
-    this.unavailableAttempts = unavailableRetry?.attempts ?? SERVICE_UNAVAILABLE_ATTEMPTS
-    this.unavailableBackoffMs = unavailableRetry?.backoffMs ?? SERVICE_UNAVAILABLE_BACKOFF_MS
+    this.gateway = gateway
+    this.unavailableAttempts = gatewayOptions?.attempts ?? SERVICE_UNAVAILABLE_ATTEMPTS
+    this.unavailableBackoffMs = gatewayOptions?.backoffMs ?? SERVICE_UNAVAILABLE_BACKOFF_MS
+    this.peer = gatewayOptions?.peer
   }
 
   private invoke(namespace: string, method: string, request: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-    return this.gateway.invoke({ namespace, method, args: invokeWireArgs(namespace, method, request), ...(signal === undefined ? {} : { signal }) })
+    return this.gateway.invoke({ namespace, method, args: invokeWireArgs(namespace, method, request), peer: this.peer, ...(signal === undefined ? {} : { signal }) })
   }
 
   private stream(namespace: string, method: string, request: Record<string, unknown>, signal?: AbortSignal): Promise<AsyncIterable<unknown>> {
     if (!('stream' in this.gateway) || this.gateway.stream === undefined) throw new Error('gateway stream is unavailable')
-    return this.gateway.stream({ namespace, method, args: { request }, ...(signal === undefined ? {} : { signal }) })
+    return this.gateway.stream({ namespace, method, args: { request }, peer: this.peer, ...(signal === undefined ? {} : { signal }) })
   }
 
   /**
@@ -473,10 +525,15 @@ export class HostExecutionRunner {
    */
   private async assertReusedPreset(sessionId: ExecutionSessionId, pinned: string | undefined): Promise<void> {
     if (pinned === undefined) return
-    const projections = await this.invoke('session', 'projections', { sessionId }) as
-      | { values?: { agentPreset?: unknown } }
-      | null
-    const recorded = projections?.values?.agentPreset
+    const read = readProjections(await this.invoke('session', 'projections', { sessionId }))
+    if (read.pendingMigration === true) {
+      throw new Error(
+        'reused session ' + sessionId + ' has a session log that is still waiting for migration, '
+        + 'so its agent preset cannot be read; open that session once to complete the migration, '
+        + 'or let the execution start a new session',
+      )
+    }
+    const recorded = (read.values as { agentPreset?: unknown } | undefined)?.agentPreset
     if (recorded === pinned) return
     throw new Error(
       'reused session ' + sessionId + ' was composed from agent preset '
@@ -515,10 +572,14 @@ export class HostExecutionRunner {
   private async sessionRoute(sessionId: ExecutionSessionId, catalog?: ModelCatalogView): Promise<ReasoningRoute | undefined> {
     let selection: { provider?: unknown; model?: unknown } | null | undefined
     try {
-      const projections = await this.invoke('session', 'projections', { sessionId }) as
-        | { values?: { modelSelection?: { lastUsed?: { provider?: unknown; model?: unknown } | null; next?: { provider?: unknown; model?: unknown } | null } } }
-        | null
-      selection = projections?.values?.modelSelection?.next ?? projections?.values?.modelSelection?.lastUsed
+      const read = readProjections(await this.invoke('session', 'projections', { sessionId }))
+      // No authoritative baseline (absent session, deferred migration, an
+      // unexpected answer) is a read failure, not "this session selected
+      // nothing": sending the host default there would switch the model of a
+      // session this run only meant to continue.
+      if (read.values === undefined) return undefined
+      const modelSelection = (read.values as { modelSelection?: { lastUsed?: { provider?: unknown; model?: unknown } | null; next?: { provider?: unknown; model?: unknown } | null } }).modelSelection
+      selection = modelSelection?.next ?? modelSelection?.lastUsed
     } catch (error) {
       console.warn('[dsh-task-board] session/projections failed while resolving the execution model route', error)
       return undefined
@@ -688,14 +749,18 @@ export class HostExecutionRunner {
    * gateway withdrew `session/projections` must not hang every execution.
    */
   private async goalVerdict(sessionId: string): Promise<ExecutionInspection | undefined> {
-    let projections: { values?: { goal?: unknown } } | null
+    let read: ProjectionRead
     try {
-      projections = await this.invoke('session', 'projections', { sessionId }) as { values?: { goal?: unknown } } | null
+      read = readProjections(await this.invoke('session', 'projections', { sessionId }))
     } catch (error) {
       console.warn('[dsh-task-board] session/projections failed while reading the goal phase; settling from the turn result', error)
       return undefined
     }
-    const goal = projections?.values?.goal
+    // A deferred migration answers with cached hints, which may name a goal
+    // that is no longer real. Settling from the turn verdict keeps an execution
+    // from waiting on a phase the Host cannot currently confirm.
+    if (read.values === undefined) return undefined
+    const goal = (read.values as { goal?: unknown }).goal
     if (goal === undefined || goal === null) return undefined
     const view = (goal as { goal?: { phase?: unknown; blockedReason?: { message?: unknown } } }).goal
     if (view?.phase === 'active') return { outcome: 'pending' }

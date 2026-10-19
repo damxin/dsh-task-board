@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
@@ -5,6 +6,16 @@ export default defineConfig({
   // exclude *.map); do not attempt to load them during transform.
   server: {
     sourcemapIgnoreList: () => true,
+  },
+  resolve: {
+    alias: {
+      // The board builds its owner Peer from the Host's connection package
+      // (DSH 0.2.1-rc.2 requires every in-process Remote invocation to name its
+      // Peer). The real class hangs a scope under a live Host root, which a
+      // capture-only test context cannot provide, so the suite resolves the
+      // package onto a double that keeps the same construction contract.
+      '@deepseek-ai/dsh-client-connection': fileURLToPath(new URL('./tests/host-peer-double.ts', import.meta.url)),
+    },
   },
   test: {
     include: ['tests/**/*.{spec,test}.{ts,tsx}'],

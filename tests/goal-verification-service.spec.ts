@@ -15,6 +15,7 @@ import { HostTaskLedger } from '../src/host-ledger.ts'
 import { INVALID_ONLY_VERIFICATION_REASON, NEVER_INVOKED_VERIFICATION_REASON, NO_MATCHING_PASS_VERIFICATION_REASON, TaskBoardHostService } from '../src/host-service.ts'
 import { PowerInhibitor } from '../src/power-inhibitor.ts'
 import { passedAttempt, resolveContract, type ModelCatalogView, type VerificationSettings } from '../src/core/verification.ts'
+import { projectionBaseline } from './projection-wire.ts'
 
 const NOW = 1_700_000_000_000
 const roots: string[] = []
@@ -168,8 +169,8 @@ function harness(overrides: {
           return overrides.catalog ?? catalog()
         case 'projections':
           return goals.phase === 'none'
-            ? { values: {} }
-            : { values: { goal: { goal: { id: 'goal-1', revision: 2, phase: goals.phase }, roundsStarted: 1 } } }
+            ? projectionBaseline({})
+            : projectionBaseline({ goal: { goal: { id: 'goal-1', revision: 2, phase: goals.phase }, roundsStarted: 1 } })
         case 'list':
           return { items: [{ sessionId: 'session-1', running: false, agentAvailable: false, updatedAt: NOW, blank: false }] }
         default:

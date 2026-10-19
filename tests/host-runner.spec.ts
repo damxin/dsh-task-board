@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Workspace } from '@deepseek-ai/dsh-workspace/types'
 import { createTask, type TaskRecord } from '../src/core/tasks.ts'
 import { HostExecutionRunner, SessionLaunchError } from '../src/host-runner.ts'
+import { pendingMigrationProjections, projectionBaseline } from './projection-wire.ts'
 
 type GatewayRequest = {
   namespace: string
   method: string
   args: Record<string, unknown>
+  /** The Peer the call speaks for; DSH 0.2.1-rc.2 requires every caller to name it. */
+  peer?: unknown
   signal?: AbortSignal
 }
 
@@ -149,7 +152,7 @@ describe('HostExecutionRunner', () => {
         // (issue #1708); the session was composed from the same preset.
         if (request.method === 'projections') {
           order.push('projections')
-          return { asOfSeq: 1, values: { agentPreset: 'preset-a' } }
+          return projectionBaseline({ agentPreset: 'preset-a' })
         }
         const payload = request.args.request as Record<string, unknown>
         if (request.method === 'prompt') {
@@ -179,7 +182,7 @@ describe('HostExecutionRunner', () => {
       stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 0, false) } })),
       invoke: fakeInvoke(async (request: GatewayRequest) => {
         if (request.namespace === 'agentPresets') return { presets: [{ id: 'preset-a', isDefault: false }] }
-        if (request.method === 'projections') return { asOfSeq: 1, values: { agentPreset: 'preset-a' } }
+        if (request.method === 'projections') return projectionBaseline({ agentPreset: 'preset-a' })
         if (request.method === 'prompt') return { accepted: true }
         throw new Error('continue must not call session/' + request.method)
       }),
@@ -378,7 +381,7 @@ describe('HostExecutionRunner', () => {
     const gateway = {
       invoke: fakeInvoke(async (request: GatewayRequest) => {
         if (request.method === 'list') return { items: [{ sessionId: 'session-a', running: true }] }
-        if (request.method === 'projections') return { values: { goal: null } }
+        if (request.method === 'projections') return projectionBaseline({ goal: null })
         return { records: [sessionEvent('turn/end', 10, 1_100, { reason: { kind: 'completed' } })], hasMore: false }
       }),
       stream: fakeStream(async () => ({
@@ -409,7 +412,7 @@ describe('HostExecutionRunner', () => {
         ? { items: [{ sessionId: 'session-a', running: false }] }
         // The settle decision reads the goal phase (no goal on this session).
         : request.method === 'projections'
-          ? { values: { goal: null } }
+          ? projectionBaseline({ goal: null })
           : page(request)),
       stream: fakeStream(async () => ({
         async *[Symbol.asyncIterator]() {
@@ -426,7 +429,7 @@ describe('HostExecutionRunner', () => {
     const items = [{ sessionId: 'session-a', running: false }]
     const list = vi.fn(async () => ({ items }))
     const page = vi.fn(async () => ({ records: [sessionEvent('turn/end', 10, 1_100, { reason: { kind: 'completed' } })], hasMore: false }))
-    const projections = vi.fn(async () => ({ values: { goal: null } }))
+    const projections = vi.fn(async () => (projectionBaseline({ goal: null })))
     const gateway = {
       invoke: fakeInvoke(async (request: GatewayRequest) => request.method === 'list'
         ? list()
@@ -615,7 +618,7 @@ describe('HostExecutionRunner', () => {
     const gateway = {
       invoke: fakeInvoke(async (request: GatewayRequest) => {
         if (request.method === 'list') return { items: sessions }
-        if (request.method === 'projections') return { values: {} }
+        if (request.method === 'projections') return projectionBaseline({})
         return page(request)
       }),
       stream: fakeStream(async () => ({
@@ -676,7 +679,7 @@ describe('HostExecutionRunner', () => {
       stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 0, false) } })),
       invoke: fakeInvoke(async (request: GatewayRequest) => {
         if (request.namespace === 'agentPresets') return { presets: [{ id: 'preset-a', isDefault: false }] }
-        if (request.method === 'projections') return { asOfSeq: 1, values: { agentPreset: 'preset-b' } }
+        if (request.method === 'projections') return projectionBaseline({ agentPreset: 'preset-b' })
         throw new Error('reuse must not call session/' + request.method)
       }),
     }
@@ -700,7 +703,7 @@ describe('HostExecutionRunner', () => {
       stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 0, false) } })),
       invoke: fakeInvoke(async (request: GatewayRequest) => {
         if (request.namespace === 'agentPresets') return { presets: [{ id: 'preset-a', isDefault: false }] }
-        if (request.method === 'projections') return { asOfSeq: 1, values: {} }
+        if (request.method === 'projections') return projectionBaseline({})
         throw new Error('reuse must not call session/' + request.method)
       }),
     }
@@ -714,6 +717,53 @@ describe('HostExecutionRunner', () => {
       name: 'SessionLaunchError',
       message: expect.stringContaining('an unreadable value'),
     })
+  })
+
+  it('operator sees a session log awaiting migration rejected with a reason they can act on', async () => {
+    // Given a reusable session whose log has not been migrated: the Host answers
+    // session/projections with cached hints only, and a hint may well name the
+    // pinned preset — which is exactly why the hint must not count as evidence.
+    const gateway = {
+      stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 0, false) } })),
+      invoke: fakeInvoke(async (request: GatewayRequest) => {
+        if (request.namespace === 'agentPresets') return { presets: [{ id: 'preset-a', isDefault: false }] }
+        if (request.method === 'projections') return pendingMigrationProjections({ agentPreset: 'preset-a' })
+        throw new Error('reuse must not call session/' + request.method)
+      }),
+    }
+
+    // When the runner continues in that session
+    const launch = new HostExecutionRunner(gateway, undefined, workspaceRegistry())
+      .launch(configuredTask(), { reuseSessionId: 'session-existing' })
+
+    // Then the run fails closed and names the migration as the blocker
+    await expect(launch).rejects.toMatchObject({
+      name: 'SessionLaunchError',
+      message: expect.stringContaining('waiting for migration'),
+    })
+  })
+
+  it('names the board\'s owner Peer on every gateway call (DSH 0.2.1-rc.2)', async () => {
+    // Given the owner Peer the board entry builds for its fiber
+    const peer = { id: 'peer-a', principal: { kind: 'owner' }, interactions: 'answer', signal: new AbortController().signal, ctx: {}, dispose: async () => {} }
+    const gateway = {
+      invoke: fakeInvoke(async (request: GatewayRequest) => {
+        if (request.method === 'list') return { items: [{ sessionId: 'session-a', running: false }] }
+        if (request.method === 'projections') return projectionBaseline({ goal: null })
+        return { records: [sessionEvent('turn/end', 10, 1_100, { reason: { kind: 'completed' } })], hasMore: false }
+      }),
+      stream: fakeStream(async () => ({ async *[Symbol.asyncIterator]() { yield snapshot([], 10, true) } })),
+    }
+
+    // When the runner works against the gateway
+    const runner = new HostExecutionRunner(gateway, undefined, workspaceRegistry(), { peer: peer as never })
+    await runner.listRunning()
+    await runner.inspect('session-a', 1_000)
+
+    // Then every call speaks for it: the gateway stopped defaulting the peer
+    const requests = [...gateway.invoke.mock.calls, ...gateway.stream.mock.calls].map(call => call[0])
+    expect(requests.length).toBeGreaterThan(1)
+    for (const request of requests) expect(request.peer).toBe(peer)
   })
 
   it('operator sees an interrupted turn reported as failed instead of succeeded', async () => {

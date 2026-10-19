@@ -63,6 +63,11 @@ const CLIENT_EXTERNALS = [
 const HOST_EXTERNALS = [
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-tools',
+  // `Peer` is the object every in-process Remote call speaks for since DSH
+  // 0.2.1-rc.2. It is backed by the Host's own scope registry, so a second
+  // bundled copy would register its scopes in a registry the gateway never
+  // consults; the Host's instance is the one that counts.
+  '@deepseek-ai/dsh-client-connection',
   '@deepseek-ai/schemastery',
 ]
 

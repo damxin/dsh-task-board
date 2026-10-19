@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/npm/v/@linxin666/dsh-task-board?style=flat-square" alt="Version">
   &nbsp;
-  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.0--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
+  <img src="https://img.shields.io/badge/DSH-%3E%3D0.2.1--rc.2-4c6ef5?style=flat-square&amp;labelColor=454a54" alt="DSH">
   &nbsp;
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
 </p>
@@ -59,7 +59,7 @@
 
 看板视图在首次打开时渲染，关闭后重新打开会保留本地视图状态。Host 同步、调度和执行独立于视图持续运行。
 
-- `src/index.ts` 通过官方 `@deepseek-ai/dsh-api-gateway`、`@deepseek-ai/dsh-workspace` 与 `@deepseek-ai/dsh-host-webserver` SDK 挂载 Host 服务。
+- `src/index.ts` 通过官方 `@deepseek-ai/dsh-api-gateway`、`@deepseek-ai/dsh-workspace` 与 `@deepseek-ai/dsh-host-webserver` SDK 挂载 Host 服务，并为每次进程内 Remote 调用构造唯一一个 owner `Peer`（来自官方 `@deepseek-ai/dsh-client-connection` SDK，保持 external 以共享宿主实例）——DSH 0.2.1-rc.2 起要求每个调用方显式携带 Peer。
 - `src/host-ledger.ts` 串行动作，并用临时文件加原子 rename 持久化 `{ schemaVersion: 6, revision, tasks, scheduler, recentRequests }`。
 - `src/host-service.ts` 负责调度触发武装（按账本最近的到期时刻武装单个定时器，宿主未提供 `timer` 服务时回退到进程定时器）、错过触发跳过、runner 启动、重启对账和电源保护理由；次数预算由账本自己执行，因此单次计划或已用尽上限的循环规则绝不会被第二次开启。
 - `src/client/native-panel.tsx` 注册看板的侧栏行与中栏页面（官方 `sidebar.panellist` 列表座位与 keyed `main` 座位），并维护与 ssh 面板的中栏互斥协议。

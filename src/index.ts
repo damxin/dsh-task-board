@@ -12,6 +12,7 @@ import type {} from '@deepseek-ai/dsh-commands'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-api-gateway'
+import { Peer } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -671,6 +672,11 @@ function applyImpl(ctx: Context, config?: Config): void {
   }
   const host = new TaskBoardHostService(ctx.typertGateway, {
     workspaceRegistry: ctx.workspaceRegistry,
+    // One owner Peer per board fiber, hanging under that fiber so its scope
+    // ends with the plugin. DSH 0.2.1-rc.2 made `peer` a required member of
+    // every in-process Remote invocation; the board is Host code, so it speaks
+    // as the operator exactly as it did when the gateway defaulted the peer.
+    peer: new Peer(ctx, { principal: { kind: 'owner' } }),
     sessionDefaultPermission,
     maxSubtaskDepth: maxSubtaskDepth(),
     goalRunEnabled,
